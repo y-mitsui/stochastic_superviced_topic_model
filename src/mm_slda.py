@@ -8,7 +8,7 @@ import sys
 import time
 from svm import SVM
 import svmpy
-import lda
+import vb
 
 class SLDA:
     def __init__(self, n_topic=10, n_iter=20, alpha=0.1, beta=0.01):
@@ -17,7 +17,7 @@ class SLDA:
         self.alpha = alpha
         self.beta = beta
     
-    def fit(self, curpus, sample_y):
+    def fit2(self, curpus, sample_y):
         word_indexes = []
         word_counts = []
         for row_curpus in curpus:
@@ -28,8 +28,9 @@ class SLDA:
                 row_counts.append(w_c)
             word_indexes.append(row_indexes)
             word_counts.append(row_counts)
-            
-        n_documents = len(word_indexes)
+        
+        n_documents = len(word_indexes)    
+        
         max_index = 0
         for d in range(n_documents):
             document_max = np.max(word_indexes[d])
@@ -41,91 +42,56 @@ class SLDA:
         theta = np.random.uniform(size=(n_documents, self.n_topic))
         old_theta = np.copy(theta)
         phi = np.random.uniform(size=(self.n_topic, n_word_types))
-        reg_weights = np.random.normal(size=self.n_topic)
-        slack = np.random.uniform(size=n_documents) + 1e-3
         svm_alpha = np.random.uniform(size=n_documents) + 1e-3
+        reg_weights = np.random.normal(size=self.n_topic)
         
-        latent_z = np.random.uniform(size=())
-        latent_z = []
-        for i in range(n_documents):
-            temp = np.random.uniform(size=(len(word_indexes[i]), self.n_topic)) + 1e-5
-            temp /= np.sum(temp, 1).reshape(-1, 1)
-            latent_z.append(temp)
-        
-        n_word_in_docs = []
-        for d in range(n_documents):
-            n_word_in_docs.append(len(word_indexes[d]))
-                
         for n in range(self.n_iter):
             sum_phi = []
             for k in range(self.n_topic):
                 sum_phi.append(sum(phi[k]))
+            ndk = theta
+            nkv = np.zeros((self.n_topic, n_word_types))
             
+            sample_X = []
             for d in range(n_documents):
                 n_word_in_doc = len(word_indexes[d])
-                sum_theta_d = sum(theta[d] + self.alpha)
-                diga_theta = digamma(theta[d] + self.alpha) - sum_theta_d
+                sum_theta_d = sum(theta[d])
+                prob_d = digamma(theta[d]) - digamma(sum_theta_d)
                 temp1 = svm_alpha[d] / n_word_in_doc * sample_y[d]
                 
-                for w in range(n_word_in_doc):
-                    word_no = word_indexes[d][w]
-                    k_sum = 0.
-                    for k in range(self.n_topic):
-                        temp2 = temp1 * reg_weights[k]
-                        prob_w = digamma(phi[k][word_no] + self.beta) - digamma(sum_phi[k] + self.beta)
-                        prob_d = diga_theta[k]
-                        latent_z[d][w][k] = np.exp(prob_w + prob_d + temp2)
-                        k_sum += latent_z[d][w][k]
-                    latent_z[d][w] /= k_sum
-                
-                for k in range(self.n_topic):
-                    theta[d, k] = (latent_z[d][:, k] * word_counts[d]).sum()
-            
-                temp2 = 1.
-                for w in range(n_word_in_doc):
-                    temp = latent_z[d][w] * (1 + np.exp(reg_weights / n_word_in_doc))
-                    temp2 *= temp.sum()
-                slack[d] = temp2
-                    
-            for k in range(self.n_topic):
-                for v in range(n_word_types):
-                    tmp = 0.
-                    for d in range(n_documents):
-                        index = np.array(word_indexes[d]) == v
-                        target_word_counts = np.array(word_counts[d])[index]
-                        if target_word_counts.shape[0] != 0:
-                            tmp += latent_z[d][index, k] * target_word_counts
-                    phi[k][v] = tmp
-            
-            t1 = time.time()
-            sample_X = []
-            for d in range(len(latent_z)):
-                z = np.argmax(latent_z[d], 1)
+                ndk[d, :] = 0.
                 dummies = np.array([0.] * self.n_topic)
-                for each_z in z:
-                    dummies[each_z] += 1.
-                sample_X.append(dummies / len(z))
-            sample_X = np.array(sample_X)
-            #svm = SVM(svm_alpha, n_iter=20000)
-            #reg_weights, self.b, svm_alpha = svm.fit(sample_X, sample_y)
+                for w in range(n_word_in_doc):
+                    temp2 = temp1 * reg_weights[k]
+                    word_no = word_indexes[d][w]
+                    prob_w = digamma(phi[:, word_no]) - digamma(sum_phi)
+                    latent_z = np.exp(prob_w + prob_d + temp2)
+                    latent_z /= np.sum(latent_z)
+                    
+                    ndk[d, :] += latent_z * word_counts[d][w]
+                    nkv[:, word_no] += latent_z * word_counts[d][w]
+                    
+                    z = np.argmax(latent_z)
+                    dummies[z] += 1.
+                sample_X.append(dummies / len(word_indexes[d]))
+                
+            theta = ndk + self.alpha
+            phi = nkv + self.beta
+            print(n, np.max(theta - old_theta))
+            old_theta = np.copy(theta)
+            t1 = time.time()
             
+            sample_X = np.array(sample_X)
             trainer = svmpy.SVMTrainer(svmpy.Kernel.linear(), 0.1)
             trainer.train(sample_X, sample_y.reshape(-1, 1))
             svm_alpha = trainer.lagrange_multipliers
             reg_weights = (svm_alpha * sample_y).T.dot(sample_X)
             self.b = (sample_y - sample_X.dot(reg_weights)).mean()
-            
             print("svm train time:%.2fsec"%(time.time() - t1))
-            
             self.reg_weights = reg_weights
-            self.latent_z = latent_z
-            y_est = slda.predict()
-            print("estimation value", y_est)
+            y_est = slda.predict(sample_X)
             print("current accuracy", accuracy_score(y_est, sample_y))
             
-            print("[%d] convergence theta:%.5f"%(n, np.max(theta - old_theta)))
-            old_theta = np.copy(theta)
-        
         for k in range(self.n_topic):
             phi[k] = phi[k] / np.sum(phi[k])
 
@@ -133,19 +99,13 @@ class SLDA:
             theta[d] = theta[d] / np.sum(theta[d])
             
         self.reg_weights = reg_weights
-        self.latent_z = latent_z
-        return phi, theta
+        return phi, theta, sample_X
+    
 
-    def predict(self):
+    def predict(self, sample_X):
         d_est = []
-        for d in range(len(self.latent_z)):
-            z = np.argmax(self.latent_z[d], 1)
-            dummies = []
-            for each_z in z:
-                val = [0] * self.n_topic
-                val[each_z] = 1
-                dummies.append(val)
-            mu = np.dot(self.reg_weights, np.average(dummies, 0))
+        for X in sample_X:
+            mu = np.dot(self.reg_weights, X)
             d_est.append(1 if mu + self.b > 0 else -1)
             
         return d_est
@@ -155,8 +115,8 @@ if __name__ == "__main__":
     from gensim import corpora, models, similarities
     np.random.seed(12345)
     
-    n_train = 150
-    n_topic = 50
+    n_train = 2000
+    n_topic = 100
     
     class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
     train = pd.read_csv('../data/train.csv').fillna(' ')
@@ -197,23 +157,15 @@ if __name__ == "__main__":
     dictionary.save('/tmp/deerwester.dict')
     corpus = [dictionary.doc2bow(text) for text in texts]
     
-    slda = SLDA(n_topic, 100)
-    phi, theta = slda.fit(corpus, train_target)
-    y_est = slda.predict()
+    slda = SLDA(n_topic, 10)
+    phi, theta, sample_X = slda.fit2(corpus, train_target)
+    y_est = slda.predict(sample_X)
     print(y_est)
     print("accuracy", accuracy_score(y_est, train_target))
-    #print(theta)  
-    
-    lda = lda.LDA(n_topic, 100)
-    phi, theta, latent_z = lda.fit(corpus)
-    sample_X = []
-    for d in range(len(latent_z)):
-        z = np.argmax(latent_z[d], 1)
-        dummies = np.array([0.] * n_topic)
-        for each_z in z:
-            dummies[each_z] += 1.
-        sample_X.append(dummies / len(z))
-    sample_X = np.array(sample_X)
+    #print(theta) 
+     
+    lda = vb.LDA(n_topic, 10)
+    phi, theta, sampe_X = lda.fit(corpus)
     #svm = SVM(svm_alpha, n_iter=20000)
     #reg_weights, self.b, svm_alpha = svm.fit(sample_X, sample_y)
     
