@@ -13,6 +13,131 @@ class SLDA:
         self.n_topic = n_topic
         self.n_iter = n_iter
     
+    def fit2(self, curpus, sample_y):
+        word_indexes = []
+        word_counts = []
+        for row_curpus in curpus:
+            row_indexes = []
+            row_counts = []
+            for w_i, w_c in row_curpus:
+                row_indexes.append(w_i)
+                row_counts.append(w_c)
+            word_indexes.append(row_indexes)
+            word_counts.append(row_counts)
+        
+        n_documents = len(word_indexes)    
+        
+        max_index = 0
+        for d in range(n_documents):
+            document_max = np.max(word_indexes[d])
+            if max_index < document_max:
+                max_index = document_max
+                
+        n_word_types = max_index + 1
+        
+        theta = np.random.uniform(size=(n_documents, self.n_topic))
+        old_theta = np.copy(theta)
+        phi = np.random.uniform(size=(self.n_topic, n_word_types))
+        svm_alpha = np.random.uniform(size=n_documents) + 1e-3
+        reg_weights = np.random.normal(size=self.n_topic)
+        
+        for n in range(self.n_iter):
+            ndk = theta
+            nkv = np.zeros((self.n_topic, n_word_types))
+            
+            sum_phi = np.sum(phi, 1)
+            prob_w = digamma(phi) - digamma(sum_phi).reshape(-1, 1)
+            sample_X = []
+            for d in range(n_documents):
+                n_word_in_doc = len(word_indexes[d])
+                sum_theta_d = sum(theta[d])
+                prob_d = digamma(theta[d]) - digamma(sum_theta_d)
+                
+                ndk[d, :] = 0.
+                dummies = np.array([0.] * self.n_topic)
+                z_reg_w_tot = 1.
+                for w in range(n_word_in_doc):
+                    temp = latent_z[d][w] * np.exp(reg_weights / n_word_in_doc)
+                    z_reg_w_tot *= temp.sum()
+                    
+                for w in range(n_word_in_doc):
+                    temp = latent_z[d][w] * np.exp(reg_weights / n_word_in_doc)
+                    z_reg_w = z_reg_w_tot / temp.sum()
+                    
+                    temp3 = sample_y[d] * reg_weights / n_word_in_doc
+                    temp4 = (1. / slack[d]) * np.exp(reg_weights / n_word_in_doc) * z_reg_w
+                    temp5 = temp3 - temp4
+                    
+                    word_no = word_indexes[d][w]
+                    
+                    latent_z = np.exp(prob_w[:, word_no] + prob_d + temp5)
+                    latent_z /= np.sum(latent_z)
+                    
+                    ndk[d, :] += latent_z * word_counts[d][w]
+                    nkv[:, word_no] += latent_z * word_counts[d][w]
+                    
+                    z = np.argmax(latent_z)
+                    dummies[z] += 1.
+                sample_X.append(dummies / len(word_indexes[d]))
+                
+            theta = ndk + self.alpha
+            phi = nkv + self.beta
+            print(n, np.max(theta - old_theta))
+            old_theta = np.copy(theta)
+            t1 = time.time()
+            
+            temp3s = []
+            for d in range(n_documents):
+                row_temp3 = []
+                for w in range(n_word_in_docs[d]):
+                    row_temp3.append(latent_z[d][w] / n_word_in_docs[d])
+                temp3s.append(row_temp3)
+                
+            def deltaRegW(reg_weights):
+                delta = np.zeros(len(reg_weights))
+                for d in range(n_documents):
+                    z_reg_w_tot = 1.
+                    temp_exp = np.exp(reg_weights / n_word_in_docs[d])
+                    
+                    for w in range(n_word_in_docs[d]):
+                        temp = latent_z[d][w] * temp_exp
+                        z_reg_w_tot *= temp.sum()
+                    
+                    temp1 = sample_y[d] * np.average(latent_z[d], 0)
+                    temp2 = 0.
+                    for w in range(n_word_in_docs[d]):
+                        temp = latent_z[d][w] * temp_exp
+                        z_reg_w = z_reg_w_tot / temp.sum()
+                        temp2 += temp3s[d][w] * temp_exp * z_reg_w
+                    delta += temp1 - temp2
+                if np.random.uniform() < 0.01:
+                    print(np.max(delta))
+                return delta
+            
+            t1 = time.time()
+            for i in range(2000):
+                reg_weights += 0.0002 * deltaRegW(reg_weights)
+            print("time", time.time() - t1)
+            
+            self.reg_weights = reg_weights
+            self.latent_z = latent_z
+            y_est = slda.predict()
+            print("y_est", y_est)
+            print("accuracy0", accuracy_score(y_est, sample_y))
+            
+            print("convergence theta",n, np.max(theta - old_theta))
+            old_theta = np.copy(theta)
+            
+        for k in range(self.n_topic):
+            phi[k] = phi[k] / np.sum(phi[k])
+
+        for d in range(n_documents):
+            theta[d] = theta[d] / np.sum(theta[d])
+            
+        self.reg_weights = reg_weights
+        return phi, theta, sample_X
+        
+    
     def fit(self, curpus, sample_y):
         word_indexes = []
         word_counts = []
@@ -42,7 +167,6 @@ class SLDA:
         reg_weights = np.random.normal(size=self.n_topic)
         slack = np.random.uniform(size=n_documents) + 1e-3
         
-        latent_z = np.random.uniform(size=())
         latent_z = []
         for i in range(n_documents):
             temp = np.random.uniform(size=(len(word_indexes[i]), self.n_topic)) + 1e-5
@@ -61,7 +185,7 @@ class SLDA:
             for d in range(n_documents):
                 n_word_in_doc = len(word_indexes[d])
                 sum_theta_d = sum(theta[d] + alpha)
-                diga_theta = digamma(theta[d] + alpha) - sum_theta_d
+                diga_theta = digamma(theta[d] + alpha) - digamma(sum_theta_d)
                 
                 z_reg_w_tot = 1.
                 for w in range(n_word_in_doc):
@@ -133,8 +257,8 @@ class SLDA:
                 return delta
             
             t1 = time.time()
-            for i in range(2000):
-                reg_weights += 0.0002 * deltaRegW(reg_weights)
+            for i in range(1000):
+                reg_weights += 0.00001 * deltaRegW(reg_weights)
             print("time", time.time() - t1)
             #print(reg_weights)
             
@@ -181,7 +305,7 @@ if __name__ == "__main__":
 
     train = pd.read_csv('../data/train.csv').fillna(' ')
 
-    n_train = 150
+    n_train = 50
 
     train_text = train['comment_text']
     train_text0 = train_text[train['toxic']==0][:n_train / 2]
@@ -190,11 +314,8 @@ if __name__ == "__main__":
     train_target0 = train['toxic'][train['toxic']==0][:n_train / 2]
     train_target1 = train['toxic'][train['toxic']==1][:n_train / 2]
     train_target = pd.concat([train_target0, train_target1]).as_matrix()
-    print(train_target)
-    
-    #train_target = [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1]
-    
     """
+    train_target = [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1]
     train_text = ['This is mother',
                     'This is me',
                     'I am good',
@@ -206,7 +327,8 @@ if __name__ == "__main__":
                      'This is OK',
                      'This is miracle',
                      'I am place',
-                     'I am grance']
+                     'I am grance',
+                     'This is I am']
     """
     stoplist = set('for a of the and to in'.split())
     texts = [[word for word in document.lower().split() if word not in stoplist]
@@ -216,8 +338,7 @@ if __name__ == "__main__":
     dictionary.save('/tmp/deerwester.dict')
     corpus = [dictionary.doc2bow(text) for text in texts]
     
-    slda = SLDA(100, 30)
-    print(corpus)
+    slda = SLDA(10, 30)
     phi, theta = slda.fit(corpus, train_target)
     y_est = slda.predict()
     print(y_est)

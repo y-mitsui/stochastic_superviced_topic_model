@@ -17,7 +17,7 @@ class SLDA:
         self.alpha = alpha
         self.beta = beta
     
-    def fit2(self, curpus, sample_y):
+    def fit(self, curpus, sample_y):
         word_indexes = []
         word_counts = []
         for row_curpus in curpus:
@@ -115,8 +115,8 @@ if __name__ == "__main__":
     from gensim import corpora, models, similarities
     np.random.seed(12345)
     
-    n_train = 2000
-    n_topic = 100
+    n_train = 5000
+    n_topic = 200
     
     class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
     train = pd.read_csv('../data/train.csv').fillna(' ')
@@ -157,14 +157,14 @@ if __name__ == "__main__":
     dictionary.save('/tmp/deerwester.dict')
     corpus = [dictionary.doc2bow(text) for text in texts]
     
-    slda = SLDA(n_topic, 10)
-    phi, theta, sample_X = slda.fit2(corpus, train_target)
+    slda = SLDA(n_topic, 100)
+    phi, theta, sample_X = slda.fit(corpus, train_target)
     y_est = slda.predict(sample_X)
     print(y_est)
     print("accuracy", accuracy_score(y_est, train_target))
     #print(theta) 
      
-    lda = vb.LDA(n_topic, 10)
+    lda = vb.LDA(n_topic, 100)
     phi, theta, sampe_X = lda.fit(corpus)
     #svm = SVM(svm_alpha, n_iter=20000)
     #reg_weights, self.b, svm_alpha = svm.fit(sample_X, sample_y)
